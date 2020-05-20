@@ -1,4 +1,4 @@
-FROM ubi8/ubi-minimal AS stagezero
+FROM registry.access.redhat.com/ubi8/ubi-minimal AS stagezero
 
 ENV PATH="/miniconda/bin:$PATH"
 ENV JAVA_HOME="/usr/lib/jvm/java-1.8.0-openjdk"
@@ -13,7 +13,7 @@ RUN microdnf install maven && microdnf clean all && \
 
 RUN wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /miniconda.sh && bash /miniconda.sh -b -p /miniconda; rm /miniconda.sh && conda install --yes nomkl && conda clean -afy
 
-FROM ubi8/ubi-minimal
+FROM registry.access.redhat.com/ubi8/ubi-minimal
 
 COPY --from=stagezero /opt /opt
 COPY --from=stagezero /miniconda /miniconda
