@@ -1,0 +1,68 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  annotations:
+    openshift.io/generated-by: OpenShiftNewBuild
+  creationTimestamp: null
+  labels:
+    build: sample-mlflow-build
+  name: sample-mlflow-build
+spec:
+  failedBuildsHistoryLimit: 5
+  nodeSelector: null
+  output:
+    to:
+      kind: ImageStreamTag
+      name: mlflow-model:latest
+  postCommit: {}
+  resources: {}
+  runPolicy: Serial
+  source:
+    dockerfile: |+
+      FROM openshift/mlflow-builder:latest
+      USER 1001
+      ENV MLFLOW_DISABLE_ENV_CREATION="true"
+      ENV GUNICORN_CMD_ARGS="-b 0.0.0.0:8000"
+
+      WORKDIR /opt/mlflow
+
+      RUN mkdir -p /opt/ml/model
+      RUN python -c 'from mlflow.tracking.artifact_utils import _download_artifact_from_uri; _download_artifact_from_uri("s3://sample-model", "/opt/ml/model")'
+      RUN python -c 'from mlflow.models.container import _install_pyfunc_deps; _install_pyfunc_deps("/opt/ml/model", install_mlflow=False)' && rm -rf /miniconda/pkgs/*
+
+      CMD python -c 'from mlflow.models import container as C; C._serve()'
+
+    type: Dockerfile
+  strategy:
+    dockerStrategy:
+      env:
+      - name: AWS_ACCESS_KEY_ID
+        valueFrom:
+          secretKeyRef:
+            key: AWS_ACCESS_KEY_ID
+            name: s2-access-credentials
+      - name: AWS_SECRET_ACCESS_KEY
+        valueFrom:
+          secretKeyRef:
+            key: AWS_SECRET_ACCESS_KEY
+            name: s2-access-credentials
+      - name: MLFLOW_S3_ENDPOINT_URL
+        valueFrom:
+          secretKeyRef:
+            key: MLFLOW_S3_ENDPOINT_URL
+            name: s2-access-credentials
+      from:
+        kind: ImageStreamTag
+        name: mlflow-builder:latest
+        namespace: openshift
+    type: Docker
+  successfulBuildsHistoryLimit: 5
+  triggers:
+  - github:
+      secret: U50FbSvv4gOYQmmFwSFI
+    type: GitHub
+  - generic:
+      secret: 8XhscO4xoD_HY7CdWGyN
+    type: Generic
+  - type: ConfigChange
+  - type: ImageChange
