@@ -1,0 +1,180 @@
+apiVersion: v1
+kind: Template
+metadata:
+  name: model-mlflow-template
+  annotations:
+    description: "Template for deploying exported MLFlow model"
+    tags: "model,mlflow"
+    openshift.io/display-name: "MLFlow binary model deploy"
+labels:
+  template: "model-mlflow-template"
+  app: ${MODELNAME}
+objects:
+- kind: ImageStream
+  apiVersion: v1
+  metadata:
+    labels:
+      app: ${MODELNAME}
+    name: ${MODELNAME}
+  spec: {}
+- kind: BuildConfig
+  apiVersion: build.openshift.io/v1
+  metadata:
+    labels:
+      build: ${MODELNAME}
+    name: ${MODELNAME}
+  spec:
+    failedBuildsHistoryLimit: 5
+    successfulBuildsHistoryLimit: 5
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${MODELNAME}:${MODELVERSION}
+    runPolicy: Serial
+    source:
+      dockerfile: |+
+        FROM ubi8/ubi-minimal
+        USER 1001
+        ENV MLFLOW_DISABLE_ENV_CREATION="true"
+        ENV GUNICORN_CMD_ARGS="-b 0.0.0.0:8000"
+        WORKDIR /opt/mlflow
+        RUN mkdir -p /opt/ml/model
+        RUN python -c 'from mlflow.tracking.artifact_utils import _download_artifact_from_uri; _download_artifact_from_uri("s3://${MODELNAME}", "/opt/ml/model")'
+        RUN python -c 'from mlflow.models.container import _install_pyfunc_deps; _install_pyfunc_deps("/opt/ml/model", install_mlflow=False)' && rm -rf /miniconda/pkgs/*
+        CMD python -c 'from mlflow.models import container as C; C._serve()'
+      type: Dockerfile
+    strategy:
+      dockerStrategy:
+        env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              key: AWS_ACCESS_KEY_ID
+              name: s3-access-credentials
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: AWS_SECRET_ACCESS_KEY
+              name: s3-access-credentials
+        - name: MLFLOW_S3_ENDPOINT_URL
+          valueFrom:
+            secretKeyRef:
+              key: MLFLOW_S3_ENDPOINT_URL
+              name: s3-access-credentials
+        from:
+          kind: DockerImage
+          name: quay.io/vamp924/mlflow-builder:latest
+      type: Docker
+    triggers:
+    - github:
+        secret: ${WEBHOOK_TRIGGER_SECRET}
+      type: GitHub
+    - generic:
+        secret: ${WEBHOOK_TRIGGER_SECRET}
+      type: Generic
+    - type: ConfigChange
+    - type: ImageChange
+- kind: Secret
+  apiVersion: v1
+  metadata:
+    name: s3-access-credentials
+  stringData:
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
+  type: Opaque
+- kind: DeploymentConfig
+  apiVersion: apps.openshift.io/v1
+  metadata:
+    labels:
+      app: ${MODELNAME}
+    name: ${MODELNAME}
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 5
+    selector:
+      deploymentconfig: ${MODELNAME}
+    strategy:
+      activeDeadlineSeconds: 21600
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          deploymentconfig: ${MODELNAME}
+      spec:
+        containers:
+        - env:
+          - name: DISABLE_NGINX
+            value: "true"
+          image: ' '
+          imagePullPolicy: Always
+          name: ${MODELNAME}
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ${MODELNAME}
+        from:
+          kind: ImageStreamTag
+          name: ${MODELNAME}:${MODELVERSION}
+      type: ImageChange
+- kind: Service
+  apiVersion: v1
+  metadata:
+    labels:
+      app: ${MODELNAME}
+      template: model-mlflow-template
+    name: ${MODELNAME}
+  spec:
+    ports:
+    - port: 8000
+      protocol: TCP
+      targetPort: 8000
+    selector:
+      deploymentconfig: ${MODELNAME}
+    sessionAffinity: None
+    type: ClusterIP
+parameters:
+  - name: MODELNAME
+    displayName: MLFlow model name
+    description: Name of the MLFlow model for s3 url construction
+    value: model
+    required: true
+  - name: MODELVERSION
+    displayName: MLFlow model version tag for s3 url construction
+    value: latest
+    required: true
+  - name: AWS_ACCESS_KEY_ID
+    displayName: AWS access key id for model S3 repository
+    value: minio
+    required: true
+  - name: AWS_SECRET_ACCESS_KEY
+    displayName: AWS secret key for model S3 repository
+    value: minio123
+    required: true
+  - name: MLFLOW_S3_ENDPOINT_URL
+    displayName: AWS endpoint URL
+    value: http://minio-route-minio.apps-crc.testing:30292
+    required: true
+  - name: WEBHOOK_TRIGGER_SECRET
+    displayName: secret for triggering the build process
+    generate: expression
+    from: "[a-zA-Z0-9]{20}"
+    required: true
