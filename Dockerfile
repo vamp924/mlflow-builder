@@ -25,7 +25,7 @@ ENV JAVA_HOME="/usr/lib/jvm/java-1.8.0-openjdk"
 ENV GUNICORN_CMD_ARGS="--timeout 60 -k gevent"
 ENV DISABLE_NGINX="true"
 
-RUN microdnf --nodocs update -y && microdnf --nodocs install wget bzip2 shadow-utils && rm -rf /var/cache/yum && microdnf clean all
+RUN microdnf --nodocs update -y && microdnf --nodocs install wget bzip2 shadow-utils gcc && rm -rf /var/cache/yum && microdnf clean all
 
 RUN useradd runner -u 1001 -g 0 -N
 
