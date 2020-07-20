@@ -33,15 +33,13 @@ objects:
     runPolicy: Serial
     source:
       dockerfile: |+
-        FROM ubi8/ubi-minimal
-        USER 1001
-        ENV MLFLOW_DISABLE_ENV_CREATION="true"
-        ENV GUNICORN_CMD_ARGS="-b 0.0.0.0:8000"
-        WORKDIR /opt/mlflow
-        RUN mkdir -p /opt/ml/model
-        RUN python -c 'from mlflow.tracking.artifact_utils import _download_artifact_from_uri; _download_artifact_from_uri("s3://sum/${EXPERIMENTID}/${RUNID}/artifacts/model/", "/opt/ml/model")' && cat /opt/ml/model/conda.yaml && if ! grep dependencies /opt/ml/model/conda.yaml &> /dev/null; then echo "dependencies:" >> /opt/ml/model/conda.yaml; fi && if ! grep "\- pip:" /opt/ml/model/conda.yaml &> /dev/null; then sed  '/dependencies\:/a - pip:' /opt/ml/model/conda.yaml -i.bkl; fi && if ! grep nomkl /opt/ml/model/conda.yaml &> /dev/null; then sed  '/dependencies\:/a - nomkl' /opt/ml/model/conda.yaml -i.bkl; fi && if ! grep "\- mlflow" /opt/ml/model/conda.yaml &> /dev/null; then sed  '/pip\:/a \ \ - mlflow' /opt/ml/model/conda.yaml -i.bkl; fi
-        RUN python -c 'from mlflow.models.container import _install_pyfunc_deps; _install_pyfunc_deps("/opt/ml/model", install_mlflow=False)' && rm -rf /miniconda/pkgs/*
-        CMD python -c 'from mlflow.models import container as C; C._serve()'
+        FROM builder-r:latest
+        SHELL [ "/bin/bash", "-c" ]
+        RUN mv $(mlflow artifacts download -u s3://sum/${EXPERIMENTID}/${RUNID}/artifacts/model/)/* /opt/model/
+        RUN if [ -f 'conda.yaml' ]; then for pkg in $(yq r conda.yaml 'dependencies.*' | sed '/^python=.*$/d' | yq r - pip.*); do pip3 install --system --no-cache-dir --index-url ${PYPI_URL} $pkg; done; fi
+        RUN for pkg in $(mlflow models predict -m /opt/model --no-conda -t csv -i <(echo 'a,b;1,2') 2>&1 >/dev/null | grep -Po '(?<=no package called ‘)[^’]*'); do R --vanilla -e "install.packages('$pkg', repo='${CRAN_URL}', clean=TRUE, quiet=TRUE)"; done;
+        EXPOSE 8000
+        CMD mlflow models serve -m /opt/model -h 0.0.0.0 -p 8000 --no-conda
       type: Dockerfile
     strategy:
       dockerStrategy:
@@ -62,8 +60,8 @@ objects:
               key: MLFLOW_S3_ENDPOINT_URL
               name: s3-access-credentials
         from:
-          kind: DockerImage
-          name: quay.io/vamp924/mlflow-builder:latest
+          kind: ImageStreamTag
+          name: mlflow-base:latest
       type: Docker
     triggers:
     - github:
@@ -121,6 +119,11 @@ objects:
           resources: {}
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
+          livenessProbe:
+            httpGet:
+              port: 8000
+              path: /
+            initialDelaySeconds: 15
         dnsPolicy: ClusterFirst
         restartPolicy: Always
         schedulerName: default-scheduler
@@ -202,3 +205,10 @@ parameters:
     generate: expression
     from: "[a-zA-Z0-9]{20}"
     required: true
+  - name: CRAN_URL
+    description: URL of preferred CRAN mirror for R packages
+    value: https://cran.r-project.org/
+  - name: PYPI_URL
+    description: URL of PyPI index to look for Python packages
+    value: https://pypi.python.org/simple
+
