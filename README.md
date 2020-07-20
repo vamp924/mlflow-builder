@@ -1,2 +1,2 @@
-# mlflow-builder
-Openshift builder image for deploying exported MLFlow models
+# mlflow-openshift
+Base images and Openshift templates for deploying exported MLFlow models
